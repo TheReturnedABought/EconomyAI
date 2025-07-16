@@ -83,3 +83,11 @@ class Model:
                 mask = np.random.rand(*layer.bias.shape) < 0.5
                 layer.bias = np.where(mask, layer.bias, other_layer.bias)
         return child
+
+    def _mutate_layer(self, layer_index):
+        layer = self.layers[layer_index]
+        mutation_strength = 0.1  # you can tune this value
+        noise_w = np.random.randn(*layer.weights.shape) * mutation_strength
+        noise_b = np.random.randn(*layer.bias.shape) * mutation_strength
+        layer.weights += noise_w
+        layer.bias += noise_b
