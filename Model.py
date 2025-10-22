@@ -5,7 +5,7 @@ import numpy as np
 
 
 class Model(nn.Module):
-    def __init__(self, input_size, hidden_sizes=[128, 256, 128], output_size=1):
+    def __init__(self, input_size, hidden_sizes=[64, 96, 128, 96, 64], output_size=1):
         super().__init__()
         layers = []
         prev_size = input_size
@@ -24,8 +24,12 @@ class Model(nn.Module):
         self.to(self.device)
 
     def forward(self, x):
+        # Convert NumPy to torch tensor
         if isinstance(x, np.ndarray):
             x = torch.tensor(x, dtype=torch.float32, device=self.device)
+        else:
+            # Move already-tensor inputs to correct device
+            x = x.to(self.device, dtype=torch.float32)
         return self.network(x)
 
     def evaluate_fitness(self, fitness_func, *args, **kwargs):
@@ -74,4 +78,4 @@ def save_model(model, path):
 
 
 def load_model(model, path):
-    model.load_state_dict(torch.load(path, map_location=get_device()))
+    model.load_state_dict(torch.load(path, map_location=get_device(), weights_only=True))
