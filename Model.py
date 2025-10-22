@@ -35,6 +35,34 @@ class Model(nn.Module):
             fitness = fitness_func(self, *args, **kwargs)
         return float(fitness.cpu()) if isinstance(fitness, torch.Tensor) else fitness
 
+    def backprop(self, loss_fn, optimizer, inputs, targets):
+        """
+        Perform a single backpropagation step.
+
+        Args:
+            loss_fn: Loss function (e.g., nn.MSELoss()).
+            optimizer: Optimizer (e.g., torch.optim.Adam(self.parameters(), lr=0.001)).
+            inputs: Input data (NumPy array or torch.Tensor).
+            targets: Ground-truth labels (NumPy array or torch.Tensor).
+        """
+        self.train()
+        optimizer.zero_grad()
+
+        # Convert NumPy inputs/targets to tensors
+        if isinstance(inputs, np.ndarray):
+            inputs = torch.tensor(inputs, dtype=torch.float32, device=self.device)
+        if isinstance(targets, np.ndarray):
+            targets = torch.tensor(targets, dtype=torch.float32, device=self.device)
+
+        # Forward pass
+        outputs = self.forward(inputs)
+        loss = loss_fn(outputs, targets)
+
+        # Backward pass
+        loss.backward()
+        optimizer.step()
+
+        return float(loss.item())
 
 # Utility functions
 def get_device():
