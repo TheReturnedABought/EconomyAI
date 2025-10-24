@@ -70,12 +70,12 @@ if __name__ == "__main__":
         print(f"🔄 Loading existing model from '{model_path}'...")
         lm(model, model_path)
     else:
-        print("⚡ No existing model found. Preparing to train a new one...")
+        print("🏗️ No existing model found. Preparing to train a new one...")
 
     # --- Ask user for phase selection ---
     print("\nSelect training phase:")
     print("0: Phase 0 (Buy-and-Hold pre-training)")
-    print("1: Phase 1 Weighted Average, daily rewards)")
+    print("1: Phase 1 Buy Low, Sell High)")
     print("2: Phase 2 (all stocks, end-of-stock reward)")
     print("3: Auto (Phase 1 → Phase 2)")
     choice = input("Enter 0, 1, 2, or 3: ").strip()

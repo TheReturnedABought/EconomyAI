@@ -5,7 +5,7 @@ import numpy as np
 
 
 class Model(nn.Module):
-    def __init__(self, input_size, hidden_sizes=[64, 96, 128, 96, 64], output_size=1):
+    def __init__(self, input_size, hidden_sizes=[64, 96, 128, 96, 64], output_size=3):
         super().__init__()
         layers = []
         prev_size = input_size

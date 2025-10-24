@@ -129,100 +129,93 @@ def train_model_phase0(model, data_files, learning_rate=1e-3, grad_clip=0.8):
 
     return model
 
-# ================= Phase 1: Daily Reward Training =================
-def train_model_phase1(model, data_files, num_epochs=35, learning_rate=5e-4,
-                       exploration_rate=0.05, min_exploration=0.005, grad_clip=0.8,
-                       reward_window=10, alpha=1.0, beta=0.25):
-
+# ================= Phase 1: Buy Low, Sell High =================
+def train_model_phase1(
+    model,
+    data_files,
+    num_epochs=1,
+    learning_rate=5e-4,
+    exploration_rate=0.05,
+    min_exploration=0.005,
+    grad_clip=0.8,
+    alpha=0.9,   # discount factor
+    beta=0.25    # reward scaling
+):
+    """
+    Phase 1: Train the model to 'Buy Low, Sell High' using trading simulation.
+    Assumes CSV columns: Date, Close, MA5, MA20, DF2MA
+    """
     device = gd()
     model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
-    loss_fn = nn.SmoothL1Loss()
-    scaler = GradScaler()  # ✅ consistent
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    loss_fn = nn.MSELoss()
 
-    best_fitness = -float("inf")
-    best_state = None
-    ema_reward = 0.0
-    ema_alpha = 0.05
-
-    print("\n🚀 Phase 1: Volatility-Aware Daily Reward Training...")
+    print("\n🚀 Phase 1: Buy Low, Sell High")
 
     for epoch in range(num_epochs):
-        eps = max(min_exploration, exploration_rate * np.exp(-0.04 * epoch))
-        total_fitness, num_stocks = 0.0, 0
-
-        print(f"\nEpoch {epoch+1}/{num_epochs} | ε={eps:.4f} | lr={optimizer.param_groups[0]['lr']:.6f}")
+        total_reward = 0.0
+        exploration = max(min_exploration, exploration_rate * (0.98 ** epoch))
 
         for file_path in data_files:
             df = pd.read_csv(file_path)
             stock_name = os.path.basename(file_path).split(".")[0]
+
             if len(df) < 30 or "Close" not in df.columns:
                 continue
 
             sim = TradingSimulation()
-            portfolio_vals = []
+            sim.reset()
 
-            for i, row in df.iterrows():
-                if pd.isna(row["Close"]):
-                    continue
+            closes = df["Close"].values
+            ma5 = df["5DayMAV"].values
+            ma20 = df["20DayMAV"].values
+            difs = df["DIFof2Av"].values
 
-                price = row["Close"]
-                prev_val = sim.get_current_value(price)
-                state = sim.get_state(row)
-                state_tensor = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
+            for i in range(1, len(df)):
+                current_data = {
+                    'Close': closes[i - 1],
+                    '5DayMAV': ma5[i - 1],
+                    '20DayMAV': ma20[i - 1],
+                    'DIFof2Av': difs[i - 1],
+                }
+                state = sim.get_state(current_data)
 
-                with torch.no_grad():
-                    q_vals = model(state_tensor)
-                    action = torch.argmax(q_vals).item()
-
-                if np.random.rand() < eps:
-                    action = np.random.choice([0, 1, 2])
-
-                new_val = sim.execute_action(action, price)
-                portfolio_vals.append(new_val)
-
-                if len(portfolio_vals) > reward_window:
-                    recent = np.array(portfolio_vals[-reward_window:])
-                    vol = np.std(np.diff(recent)) / (np.mean(recent) + 1e-8)
+                # Predict Q-values
+                q_values = model.forward(state)
+                if random.random() < exploration:
+                    action = random.choice([0, 1, 2])  # SELL, HOLD, BUY
                 else:
-                    vol = 0.0
+                    action = torch.argmax(q_values).item()
 
-                raw_reward = np.log((new_val + 1e-8) / (prev_val + 1e-8))
-                reward = alpha * raw_reward - beta * vol
-                ema_reward = ema_alpha * reward + (1 - ema_alpha) * ema_reward
-                reward_norm = np.tanh(ema_reward * 5)
+                # Execute action
+                new_value = sim.execute_action(action, closes[i])
+                old_value = sim.portfolio_value[-2]
+                reward = (new_value - old_value) / old_value  # relative gain/loss
+                total_reward += reward
 
+                # Compute next state
+                next_data = {
+                    'Close': closes[i],
+                    '5DayMAV': ma5[i],
+                    '20DayMAV': ma20[i],
+                    'DIFof2Av': difs[i],
+                }
+                next_state = sim.get_state(next_data)
+
+                # Q-learning target
+                next_q = model.forward(next_state)
+                target = reward + alpha * torch.max(next_q).detach()
+
+                # Backpropagation
                 optimizer.zero_grad()
-                with autocast(device_type="cuda"):
-                    pred = model(state_tensor)
-                    target = pred.clone().detach()
-                    target[0, action] = reward_norm
-                    loss = loss_fn(pred, target)
-                scaler.scale(loss).backward()
+                loss = loss_fn(q_values[action], target)
+                loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
 
-            final_val = sim.get_current_value(df.iloc[-1]["Close"])
-            fitness = np.log((final_val + 1e-8) / (sim.initial_cash + 1e-8))
-            total_fitness += fitness
-            num_stocks += 1
-            print(f"  {stock_name}: value={final_val:.2f}, reward={fitness*100:+.2f}%")
+        print(f"Epoch [{epoch+1}/{num_epochs}]  |  Reward: {total_reward:.4f}  |  ε={exploration:.4f}")
 
-            if fitness > best_fitness:
-                best_fitness = fitness
-                best_state = model.state_dict().copy()
-
-        scheduler.step()  # ✅ after optimizer updates
-        if num_stocks > 0:
-            avg_fit = (total_fitness / num_stocks) * 100
-            print(f"📊 Epoch {epoch + 1}: Avg Fitness={avg_fit:+.2f}% | Best={best_fitness*100:+.2f}%")
-
-    if best_state:
-        model.load_state_dict(best_state)
-        print(f"\n✅ Phase 1 complete. Best fitness {best_fitness*100:+.2f}%")
-
+    print("\n✅ Phase 1 training complete.")
     return model
 
 # ================= Phase 2: End-of-stock Reward =================
